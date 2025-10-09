@@ -129,7 +129,8 @@ auto handle_request(net_call_t& call) -> void
         auto client = init_call_and_create_client(call, http_method_patch, "/assignments/", call.id1, "/actions/", call.id2);
         httplib::Headers request_headers =
         {
-            { "if-match", call.etag }
+            //{ "if-match", call.etag }
+            { "If-Match", call.etag }
         };
         call.request_headers = to_string(request_headers);
         auto result = client.Patch(call.endpoint, request_headers, call.request_body, "application/json");

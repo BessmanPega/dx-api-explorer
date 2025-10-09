@@ -80,12 +80,13 @@ You can adjust the font size to taste. The app will attempt to select something 
 A minimal set of components and field attributes are supported:
 
 - Components:
+	- Currency
+	- DefaultForm
 	- Reference (class context only)
 	- Region
-	- View
 	- TextArea
 	- TextInput
-	- DefaultForm
+	- View
 
 - Field attributes (**boolean only**):
 	- Readonly
@@ -108,3 +109,74 @@ This app's code is released into the public domain. The included libraries all s
 Bugs are likely — issues and pull requests are welcome. As this is a side project and time is short, code which is not in harmony with the general style of the codebase will have to be rejected. Contributing to this project means assenting to said contributions being released into the public domain.
 
 Thanks to [Daniël Wedema](https://github.com/danielwedema) for the idea to incorporate the X-Ray feature.
+
+### Code structure
+
+This project uses a [unity build](https://en.wikipedia.org/wiki/Unity_build) to speed up compilation. Code is mostly written directly in header files without function prototypes, which reduces the size of the codebase by more than you might expect. There are no global variables, although there *is* global state in [app_context_t](src/dx_api_app_types.h).
+
+Component types are modeled with a [tagged union](https://en.wikipedia.org/wiki/Tagged_union) to keep the overall type system [simple](https://en.wikipedia.org/wiki/Complex_system). This also avoids virtual functions, which improves [cache locality](https://en.wikipedia.org/wiki/Locality_of_reference) and helps keep the [immediate mode GUI](https://caseymuratori.com/blog_0001) humming along at 60+ FPS without melting a CPU core.
+
+For the sake of [locality of behavior](https://htmx.org/essays/locality-of-behaviour/), functions concerned with component types are collected in [src/dx_api_component_type_procs.cpp](src/dx_api_component_type_procs.cpp).
+
+#### Adding a new component
+This is perhaps best illustrated by example. Here's how I added support for the Currency component type:
+
+##### 1. Study the component type
+Using the DX API Explorer, I worked through a case with an assignment containing a currency field.
+
+```json
+{
+  "config": {
+    "allowDecimals": true,
+    "alwaysShowISOCode": false,
+    "isoCodeSelection": "constant",
+    "label": "@FL .TransferAmount",
+    "labelOption": "default",
+    "value": "@P .TransferAmount"
+  },
+  "type": "Currency"
+}
+```
+
+I wanted a very minimal implementation for this component — basically, treating it as a synonym for `TextInput` and letting Pega handle validation — so the only thing I needed here is the `type`, which is `Currency`.
+
+##### 2. Update component types
+In [src/dx_api_model_types.h](src/dx_api_model_types.h) I added a new entry to `component_type_t`:
+
+```c++
+//...
+component_type_view,      // (5)
+component_type_currency,  // (6) new entry
+component_type_text_area, // (7)
+//...
+```
+
+I then added a corresponding entry **at the same position** in `component_type_strings`:
+
+```c++
+//...
+"View",     // (5)
+"Currency", // (6) new entry
+"TextArea", // (7)
+//...
+```
+
+This latter entry is the value of `type` in the component's JSON definition.
+
+##### 3. Update component type processing routines
+At this point I then tried to build the project, which produced several warnings like so:
+
+```
+Warning	C4061:	enumerator 'dx_api_explorer::component_type_currency' in switch of enum 'dx_api_explorer::component_type_t' is not explicitly handled by a case label	
+```
+These warnings took me directly to locations in [src/dx_api_component_type_procs.cpp](src/dx_api_component_type_procs.cpp) where I needed to handle the newly added `component_type_currency`. Because I was just trying to provide a bare-minimum currency component for the time being, all I had to do was modify the relevant `switch` statements to handle `component_type_currency` in the same way as `component_type_text_input`.
+
+```c++
+case component_type_currency: // new entry
+case component_type_text_area:
+case component_type_text_input:
+```
+
+おしまい。
+
+Of course, more sophisticated components will require more work. More on that anon.

@@ -5,7 +5,6 @@
 #include <cctype>
 #include <chrono>
 #include <fstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include "dx_api_app_types.h"
@@ -49,10 +48,16 @@ auto to_enum(std::string_view str, enum_c_strs_t<enum_count> enum_strings) -> en
 {
     auto str_lower = to_lower(str);
     auto result = static_cast<enum_t>(1);
-    for (int i = result + 1; i < enum_count; ++i)
+    auto count = enum_count;
+    for (int i = result + 1; i < count; ++i)
     {
-        auto enum_str_lower = to_lower(enum_strings[i]);
-        if (str_lower == enum_str_lower) result = static_cast<enum_t>(i);
+        auto enum_str = enum_strings[i];
+        auto enum_str_lower = to_lower(enum_str);
+        if (str_lower == enum_str_lower)
+        {
+            result = static_cast<enum_t>(i);
+            break;
+        }
     };
 
     return result;

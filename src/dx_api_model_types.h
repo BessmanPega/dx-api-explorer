@@ -40,6 +40,7 @@ enum component_type_t
     component_type_view,
 
     // Fields:
+    component_type_currency,
     component_type_text_area,
     component_type_text_input,
 
@@ -50,28 +51,32 @@ enum component_type_t
     // ...nothing yet!
 
     // Always last:
-    component_type_count,
+    component_type_count
 };
 
 // Component strings as we'll see them in DX API responses, should be in same order as enum.
-constexpr enum_c_strs_t<component_type_count> component_type_strings =
+constexpr enum_c_strs_t component_type_strings =
 {
     "Unspecified",
     "Unknown",
     "Reference",
     "Region",
     "View",
+    "Currency",
     "TextArea",
     "TextInput",
-    "DefaultForm",
+    "DefaultForm"
 };
+
+static_assert(decltype(component_type_strings)().size() == component_type_count,
+    "Must have the same number of component type enums and strings.");
 
 // Component megastruct:
 struct component_t;
 using component_list_t = std::vector<component_t>;
 struct component_t
 {
-    component_type_t    type = component_type_t::component_type_unspecified;
+    component_type_t type = component_type_t::component_type_unspecified;
     std::string name;
     std::string class_id;
     std::string key; // Identifies this rule, or the referenced rule in the case of references/fields.

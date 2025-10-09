@@ -103,7 +103,9 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\main.cpp" />
+    <None Include="src\dx_api_component_type_procs.cpp" />
+    <ClCompile Include="src\dx_api_build.cpp" />
+    <None Include="src\dx_api_main.cpp" />
     <ClCompile Include="lib\imgui\backends\imgui_impl_sdl2.cpp" />
     <ClCompile Include="lib\imgui\backends\imgui_impl_sdlrenderer2.cpp" />
     <ClCompile Include="lib\imgui\imgui.cpp" />

@@ -154,163 +154,11 @@ auto resolve_name(std::string_view raw_name, const content_map_t& content, std::
     return result;
 }
 
-// Recursively validates that component and all of its children are in a valid
-// state for submission. Only applies to field components.
-auto validate_component_r(const component_t& component, const component_map_t& components, const field_map_t& fields) -> bool
-{
-    bool is_valid = true;
+// Defined in main.cpp
+auto validate_component_r(const component_t& component, const component_map_t& components, const field_map_t& fields) -> bool;
 
-    switch (component.type)
-    {
-    case component_type_text_input:
-    case component_type_text_area:
-    {
-        if (component.is_required)
-        {
-            const auto& field = fields.at(component.key);
-            if (field.data.empty())
-            {
-                is_valid = false;
-            }
-        }
-    } break;
-    }
-
-    // Process children.
-    if (!component.children.empty())
-    {
-        for (auto& child : component.children)
-        {
-            if (!is_valid) break;
-            is_valid = validate_component_r(child, components, fields);
-        }
-    }
-
-    return is_valid;
-}
-
-// Recursively makes component and its children from DX API JSON response data.
-auto make_component_r(const nlohmann::json& component_json, app_context_t& app, std::string_view parent_class_id = "") -> component_t
-{
-    component_t new_component;
-    new_component.json = component_json.dump(json_indent);
-    new_component.type = to_component_type(component_json["type"]);
-
-    switch (new_component.type)
-    {
-    case component_type_unknown:
-    {
-        new_component.class_id = parent_class_id;
-        // ...always first.
-
-        new_component.name = component_json["type"];
-
-        // Always last:
-        new_component.debug_string = to_string(new_component.type, new_component.name);
-    } break;
-    case component_type_reference:
-    {
-        new_component.class_id = parent_class_id;
-        // ...always first.
-
-        auto& config_json = component_json["config"];
-        new_component.name = resolve_name(config_json["name"], app.case_info.content, new_component.class_id);
-        new_component.ref_type = to_component_type(config_json["type"]);
-
-        // References might specify a context. If that context exists, we use it if we support it. If it exists
-        // and we don't support it, we mark this reference as broken.
-        if (config_json.contains("context"))
-        {
-            std::string context = config_json["context"];
-
-            if (context.substr(0, 6) == "@CLASS")
-            {
-                // "@CLASS The-Class-Name"
-                //  0123456789...
-                //         ^
-                //         Start here.
-                new_component.class_id = context.substr(7);
-            }
-            else
-            {
-                new_component.is_broken = true;
-                new_component.broken_string = std::format("Unsupported context: {}", context);
-            }
-        }
-
-        // Always last:
-        new_component.debug_string = to_string(new_component.type, new_component.name, new_component.ref_type);
-    } break;
-    case component_type_region:
-    {
-        new_component.class_id = parent_class_id;
-        // ...always first.
-
-        new_component.name = resolve_name(component_json["name"], app.case_info.content, new_component.class_id);
-
-        // Always last:
-        new_component.debug_string = to_string(new_component.type, new_component.name);
-    } break;
-    case component_type_view:
-    {
-        new_component.class_id = component_json["classID"];
-        // ...always first.
-
-        new_component.name = resolve_name(component_json["name"], app.case_info.content, new_component.class_id);
-
-        // Views usually, but not always, specify a template in the config.
-        auto& config_json = component_json["config"];
-        if (config_json.contains("template")) new_component.ref_type = to_component_type(config_json["template"]);
-
-        // Always last:
-        new_component.debug_string = to_string(new_component.type, new_component.name, new_component.ref_type);
-    } break;
-    case component_type_text_area:
-    case component_type_text_input:
-    {
-        new_component.class_id = parent_class_id;
-        // ...always first.
-
-        auto& config_json = component_json["config"];
-        new_component.name = resolve_name(config_json["value"], app.case_info.content, new_component.class_id, false);
-        new_component.label = resolve_label(config_json["label"], app.resources.fields, new_component.class_id);
-
-        // Check for optional attributes.
-        if (config_json.contains("disabled")) new_component.is_disabled = to_bool(config_json["disabled"]);
-        if (config_json.contains("readOnly")) new_component.is_readonly = to_bool(config_json["readOnly"]);
-        if (config_json.contains("required")) new_component.is_required = to_bool(config_json["required"]);
-
-        // Always last:
-        new_component.debug_string = to_string(new_component.type, new_component.label);
-    } break;
-    }
-
-    // Validate the component and finalize it.
-    if (new_component.name.empty()
-        || new_component.class_id.empty()
-        || new_component.type == component_type_unspecified)
-    {
-        std::string error_message = std::format("Failed to make component from JSON:\n{}", new_component.json);
-        throw std::runtime_error(error_message);
-    }
-    else
-    {
-        new_component.key = make_key(new_component.class_id, new_component.name);
-    }
-
-    // Process children:
-    if (component_json.contains("children"))
-    {
-        for (const auto& child : component_json["children"])
-        {
-            //component_t new_child_component = make_component_r(child, app, parent_class_id);
-            component_t new_child_component = make_component_r(child, app, new_component.class_id);
-            new_component.children.push_back(new_child_component);
-        }
-    }
-
-    return new_component;
-};
+// Defined in main.cpp
+auto make_component_r(const nlohmann::json& component_json, app_context_t& app, std::string_view parent_class_id = "") -> component_t;
 
 // https://docs.pega.com/bundle/dx-api/page/platform/dx-api/understand-dx-api-response.html#d33668e350
 auto parse_dx_response(app_context_t& app, std::string_view response_body) -> void
@@ -360,10 +208,26 @@ auto parse_dx_response(app_context_t& app, std::string_view response_body) -> vo
             const auto& content_value = content.value();
 
             std::string v;
-            if (content_value.is_string())         v = content_value.get<std::string>();
-            else if (content_value.is_number_integer()) v = std::to_string(content_value.get<int>());
-            else if (content_value.is_number_float())   v = std::to_string(content_value.get<float>());
-            else if (content_value.is_boolean())        v = std::to_string(content_value.get<bool>());
+            if (content_value.is_string())
+            {
+                v = content_value.get<std::string>();
+            }
+            else if (content_value.is_number_integer())
+            {
+                v = std::to_string(content_value.get<int>());
+            }
+            else if (content_value.is_number_float())
+            {
+                v = std::to_string(content_value.get<double>());
+
+                // Trim trailing zeros:
+                auto end = v.find_last_not_of('0') + 1;
+                v.erase(end);
+            }
+            else if (content_value.is_boolean())
+            {
+                v = std::to_string(content_value.get<bool>());
+            }
 
             app.case_info.content[k] = v;
         }

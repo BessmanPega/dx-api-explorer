@@ -30,7 +30,7 @@ enum http_method_t
 };
 
 // Strings that correspond to http method enums.
-constexpr enum_c_strs_t<http_method_count> http_method_strings =
+constexpr enum_c_strs_t http_method_strings =
 {
     "Unspecified",
     "Unknown",
@@ -44,6 +44,9 @@ constexpr enum_c_strs_t<http_method_count> http_method_strings =
     "Patch",
     "Connect"
 };
+
+static_assert(decltype(http_method_strings)().size() == http_method_count,
+    "Must have the same number of http method type enums and strings.");
 
 // https://docs.pega.com/bundle/dx-api/page/platform/dx-api/constellacion-dx-api-endponts.html
 enum struct net_call_type_t
