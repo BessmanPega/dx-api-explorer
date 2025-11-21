@@ -55,7 +55,7 @@ enum component_type_t
 };
 
 // Component strings as we'll see them in DX API responses, should be in same order as enum.
-constexpr enum_c_strs_t component_type_strings =
+constexpr std::array<const char*, component_type_count> component_type_strings =
 {
     "Unspecified",
     "Unknown",

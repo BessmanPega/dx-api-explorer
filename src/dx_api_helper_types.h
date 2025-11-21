@@ -33,7 +33,7 @@ public:
 };
 
 // For enum type specifier strings.
-template<int enum_count>
+template<size_t enum_count>
 using enum_c_strs_t = std::array<const char*, enum_count>;
 }
 

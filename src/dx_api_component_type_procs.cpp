@@ -23,7 +23,7 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
 {
     component_t new_component;
     new_component.json = component_json.dump(json_indent);
-    new_component.type = to_component_type(component_json["type"]);
+    new_component.type = to_component_type(component_json["type"].get<std::string>());
 
     switch (new_component.type)
     {
@@ -32,7 +32,7 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         new_component.class_id = parent_class_id;
         // ...always first.
 
-        new_component.name = component_json["type"];
+        new_component.name = component_json["type"].get<std::string>();
 
         // Always last:
         new_component.debug_string = to_string(new_component.type, new_component.name);
@@ -43,8 +43,8 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         // ...always first.
 
         auto& config_json = component_json["config"];
-        new_component.name = resolve_name(config_json["name"], app.case_info.content, new_component.class_id);
-        new_component.ref_type = to_component_type(config_json["type"]);
+        new_component.name = resolve_name(config_json["name"].get<std::string>(), app.case_info.content, new_component.class_id);
+        new_component.ref_type = to_component_type(config_json["type"].get<std::string>());
 
         // References might specify a context. If that context exists, we use it if we support it. If it exists
         // and we don't support it, we mark this reference as broken.
@@ -75,7 +75,7 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         new_component.class_id = parent_class_id;
         // ...always first.
 
-        new_component.name = resolve_name(component_json["name"], app.case_info.content, new_component.class_id);
+        new_component.name = resolve_name(component_json["name"].get<std::string>(), app.case_info.content, new_component.class_id);
 
         // Always last:
         new_component.debug_string = to_string(new_component.type, new_component.name);
@@ -85,11 +85,11 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         new_component.class_id = component_json["classID"];
         // ...always first.
 
-        new_component.name = resolve_name(component_json["name"], app.case_info.content, new_component.class_id);
+        new_component.name = resolve_name(component_json["name"].get<std::string>(), app.case_info.content, new_component.class_id);
 
         // Views usually, but not always, specify a template in the config.
         auto& config_json = component_json["config"];
-        if (config_json.contains("template")) new_component.ref_type = to_component_type(config_json["template"]);
+        if (config_json.contains("template")) new_component.ref_type = to_component_type(config_json["template"].get<std::string>());
 
         // Always last:
         new_component.debug_string = to_string(new_component.type, new_component.name, new_component.ref_type);
@@ -102,8 +102,8 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         // ...always first.
 
         auto& config_json = component_json["config"];
-        new_component.name = resolve_name(config_json["value"], app.case_info.content, new_component.class_id, false);
-        new_component.label = resolve_label(config_json["label"], app.resources.fields, new_component.class_id);
+        new_component.name = resolve_name(config_json["value"].get<std::string>(), app.case_info.content, new_component.class_id, false);
+        new_component.label = resolve_label(config_json["label"].get<std::string>(), app.resources.fields, new_component.class_id);
 
         // Check for optional attributes.
         if (config_json.contains("disabled")) new_component.is_disabled = to_bool(config_json["disabled"]);

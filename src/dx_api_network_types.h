@@ -30,7 +30,7 @@ enum http_method_t
 };
 
 // Strings that correspond to http method enums.
-constexpr enum_c_strs_t http_method_strings =
+constexpr std::array<const char*, http_method_count> http_method_strings =
 {
     "Unspecified",
     "Unknown",
