@@ -43,13 +43,13 @@ auto to_lower(std::string_view str) -> std::string
 //
 // You shouldn't have to specifiy the enum count because that should be inferred
 // from the enum strings parameter.
-template<typename enum_t, int enum_count>
+template<typename enum_t, size_t enum_count>
 auto to_enum(std::string_view str, enum_c_strs_t<enum_count> enum_strings) -> enum_t
 {
     auto str_lower = to_lower(str);
     auto result = static_cast<enum_t>(1);
     auto count = enum_count;
-    for (int i = result + 1; i < count; ++i)
+    for (size_t i = result + 1; i < count; ++i)
     {
         auto enum_str = enum_strings[i];
         auto enum_str_lower = to_lower(enum_str);

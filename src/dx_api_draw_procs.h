@@ -254,7 +254,7 @@ auto draw_main_window(app_context_t& app) -> void
         ImGui::SetNextWindowSize(ImVec2(main_viewport->WorkSize.x / 2.0f - font_size * 1.5f, main_viewport->WorkSize.y - font_size * 2.0f), ImGuiCond_FirstUseEver);
     }
 
-    if (std::ranges::contains(app.active_events, app_event_type_t::reset_window_layout))
+    if (std::find(app.active_events.begin(), app.active_events.end(), app_event_type_t::reset_window_layout) != app.active_events.end())
     {
         const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
         auto font_size = ImGui::GetFontSize();
@@ -283,9 +283,9 @@ auto draw_main_window(app_context_t& app) -> void
     // different from if we ran on a single thread. But we can at least render
     // a spinner/progress bar/something better than just freezing up.
     // 
-    // Even if we were single threaded, we would still want to work in this manner —
+    // Even if we were single threaded, we would still want to work in this manner ï¿½
     // queue up network operations to take some action and refresh our cache,
-    // then render the updated cache — and its not much harder to do that in multithreaded
+    // then render the updated cache ï¿½ and its not much harder to do that in multithreaded
     // way.
     if (!have_pending_requests)
     {
@@ -394,7 +394,7 @@ auto draw_debug_window(app_context_t& app) -> void
         ImGui::SetNextWindowSize(ImVec2(main_viewport->WorkSize.x - next_pos_x - font_size, main_viewport->WorkSize.y - font_size * 2.0f), ImGuiCond_FirstUseEver);
     }
 
-    if (std::ranges::contains(app.active_events, app_event_type_t::reset_window_layout))
+    if (std::find(app.active_events.begin(), app.active_events.end(), app_event_type_t::reset_window_layout) != app.active_events.end())
     {
         const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
         auto font_size = ImGui::GetFontSize();
