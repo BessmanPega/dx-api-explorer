@@ -3,6 +3,8 @@
 
 https://github.com/user-attachments/assets/39a573e8-dd27-4138-9664-4566b90eab43
 
+[![Build and Release](https://github.com/BessmanPega/dx-api-explorer/actions/workflows/msbuild.yml/badge.svg)](https://github.com/BessmanPega/dx-api-explorer/actions/workflows/msbuild.yml)
+
 
 This app helps you understand [Pega's Constellation DX API](https://docs.pega.com/bundle/dx-api/page/platform/dx-api/dx-api-version-2-con.html) by showing it in action. It's a desktop application that let's you work through a [case](https://docs.pega.com/bundle/platform/page/platform/case-management/case-management-overview.html), providing detailed developer information so you know *exactly* what the DX API is doing every step of the way.
 
