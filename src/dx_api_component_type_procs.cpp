@@ -67,6 +67,22 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
             }
         }
 
+        // Check for a label to pass down to children.
+        if (config_json.contains("inheritedProps"))
+        {
+            for (const auto& inherited_prop : config_json["inheritedProps"])
+            {
+                if (inherited_prop["prop"].get<std::string>() == "label")
+                {
+                    std::string field_key = config_json["ruleClass"].get<std::string>() + config_json["authorContext"].get<std::string>();
+                    auto& field = app.resources.fields.at(field_key);
+                    
+                    std::string_view inherited_label = inherited_prop["value"];
+                    field.inherited_label = inherited_label;
+                }
+            }
+        }
+
         // Always last:
         new_component.debug_string = to_string(new_component.type, new_component.name, new_component.ref_type);
     } break;
@@ -94,6 +110,32 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
         // Always last:
         new_component.debug_string = to_string(new_component.type, new_component.name, new_component.ref_type);
     } break;
+    case component_type_autocomplete:
+    {
+        new_component.class_id = parent_class_id;
+        // ...always first.
+
+        auto& config_json = component_json["config"];
+        auto context_page = config_json["contextPage"].get<std::string>();
+        new_component.name = resolve_name(context_page, app.case_info.content, new_component.class_id, false);
+
+        // Check for optional attributes.
+        if (config_json.contains("disabled")) new_component.is_disabled = to_bool(config_json["disabled"]);
+        if (config_json.contains("readOnly")) new_component.is_readonly = to_bool(config_json["readOnly"]);
+        if (config_json.contains("required")) new_component.is_required = to_bool(config_json["required"]);
+
+        // TODO: component validation / key creation should probably be refactored out.
+        new_component.key = make_key(new_component.class_id, new_component.name);
+        auto& field = app.resources.fields.at(new_component.key);
+        field.item_values = { "foo", "bar", "baz" };
+        field.item_keys = { "0", "1", "2" };
+        field.item_selected_idx = 0;
+
+        new_component.label = resolve_label(field.inherited_label, app.resources.fields, new_component.class_id);
+
+        // Always last:
+        new_component.debug_string = to_string(new_component.type, new_component.label);
+    } break;
     case component_type_currency:
     case component_type_text_area:
     case component_type_text_input:
@@ -116,11 +158,13 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
     // Ignore these:
     case component_type_count:
     case component_type_default_form:
+    case component_type_data_reference:
     case component_type_unspecified:
     default: break;
     }
 
     // Validate the component and finalize it.
+    // TODO: refactor this out.
     if (new_component.name.empty()
         || new_component.class_id.empty()
         || new_component.type == component_type_unspecified)
@@ -138,7 +182,6 @@ auto make_component_r(const nlohmann::json& component_json, app_context_t& app, 
     {
         for (const auto& child : component_json["children"])
         {
-            //component_t new_child_component = make_component_r(child, app, parent_class_id);
             component_t new_child_component = make_component_r(child, app, new_component.class_id);
             new_component.children.push_back(new_child_component);
         }
@@ -155,6 +198,7 @@ auto validate_component_r(const component_t& component, const component_map_t& c
 
     switch (component.type)
     {
+    case component_type_autocomplete:
     case component_type_currency:
     case component_type_text_input:
     case component_type_text_area:
@@ -171,6 +215,7 @@ auto validate_component_r(const component_t& component, const component_map_t& c
     // Ignore these:
     case component_type_count:
     case component_type_default_form:
+    case component_type_data_reference:
     case component_type_reference:
     case component_type_region:
     case component_type_unknown:
@@ -223,6 +268,7 @@ auto draw_component_r(component_t& component, resources_t& resources, int& id, s
             bblr.y = std::max(bblr.y, ref_bblr.y);
         }
     } break;
+    case component_type_autocomplete:
     case component_type_currency:
     case component_type_text_area:
     case component_type_text_input:
@@ -235,6 +281,27 @@ auto draw_component_r(component_t& component, resources_t& resources, int& id, s
             if (component.type == component_type_text_area)
             {
                 ImGui::InputTextMultiline(component.label.c_str(), &field.data);
+            }
+            else if (component.type == component_type_autocomplete)
+            {
+                auto& display_string = field.item_values[field.item_selected_idx];
+                if (ImGui::BeginCombo(component.label.c_str(), display_string.c_str()))
+                {
+                    for (int n = 0; n < field.item_values.size(); n++)
+                    {
+                        const bool is_selected = (field.item_selected_idx == n);
+                        if (ImGui::Selectable(field.item_values[n].c_str(), is_selected))
+                        {
+                            field.item_selected_idx = n;
+                            field.data = field.item_keys[n];
+                        }
+
+                        // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
+                        if (is_selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
             }
             else
             {
@@ -290,6 +357,7 @@ auto draw_component_r(component_t& component, resources_t& resources, int& id, s
     } break;
     case component_type_count:
     case component_type_default_form:
+    case component_type_data_reference:
     case component_type_region:
     case component_type_unknown:
     case component_type_unspecified:

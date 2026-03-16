@@ -80,18 +80,19 @@ You can adjust the font size to taste. The app will attempt to select something 
 A minimal set of components and field attributes are supported:
 
 - Components:
-	- Currency
-	- DefaultForm
-	- Reference (class context only)
-	- Region
-	- TextArea
-	- TextInput
-	- View
+	- `DataReference` (single, AutoComplete, **WIP**)
+	- `Currency`
+	- `DefaultForm`
+	- `Reference` (class context only)
+	- `Region`
+	- `TextArea`
+	- `TextInput`
+	- `View`
 
 - Field attributes (**boolean only**):
-	- Readonly
-	- Required
-	- Disabled
+	- `Readonly`
+	- `Required`
+	- `Disabled`
 
 ### Licensing and libraries
 
@@ -114,9 +115,12 @@ Thanks to [Daniël Wedema](https://github.com/danielwedema) for the idea to inco
 
 This project uses a [unity build](https://en.wikipedia.org/wiki/Unity_build) to speed up compilation. Code is mostly written directly in header files without function prototypes, which reduces the size of the codebase by more than you might expect. There are no global variables, although there *is* global state in [app_context_t](src/dx_api_app_types.h).
 
-Component types are modeled with a [tagged union](https://en.wikipedia.org/wiki/Tagged_union) to keep the overall type system [simple](https://en.wikipedia.org/wiki/Complex_system). This also avoids virtual functions, which improves [cache locality](https://en.wikipedia.org/wiki/Locality_of_reference) and helps keep the [immediate mode GUI](https://caseymuratori.com/blog_0001) humming along at 60+ FPS without melting a CPU core.
+Component types are modeled with a [tagged union](https://en.wikipedia.org/wiki/Tagged_union) to keep the overall type system [simple](https://en.wikipedia.org/wiki/Complex_system). This also avoids virtual functions, which improves [cache locality](https://en.wikipedia.org/wiki/Locality_of_reference) and helps keep the [immediate mode GUI](https://caseymuratori.com/blog_0001) humming along at 60+ FPS without melting a CPU core — and stylistically, containers can be filled with instances of structures rather than the object pointers which would be necessary for virtual function invocation.
 
 For the sake of [locality of behavior](https://htmx.org/essays/locality-of-behaviour/), functions concerned with component types are collected in [src/dx_api_component_type_procs.cpp](src/dx_api_component_type_procs.cpp).
+
+### Data
+The internal data loosely mirrors the DX API, not by design, but by convenience. Simplicity is the priority, and it just so happens that this alignment between internal representation and DX API specification has proven largely convenient. We freely break this alignment whenever it promotes implementation simplicity. So don't take the internal data model as authoritative: actual DX API payloads are the true authority.
 
 #### Adding a new component
 This is perhaps best illustrated by example. Here's how I added support for the Currency component type:
@@ -180,3 +184,23 @@ case component_type_text_input:
 おしまい。
 
 Of course, more sophisticated components will require more work. More on that anon.
+
+#### Data References — Singular
+In an App Studio view, when you setup a singular data reference with the default configuration, the resultant DX API JSON will specify:
+
+1. A reference to a view.
+2. The view will be of type `DataReference`.
+3. The view will contain a component of type `AutoComplete`.
+
+That `AutoComplete` is what we currently support. Of note, the label information for this component is provided in the `config` section of the `DataReference` as an ""inherited prop:"
+
+```json
+"inheritedProps": [
+    {
+    "prop": "label",
+    "value": "@L Foo"
+    }
+]
+```
+
+At run time, when we are building our component tree and first encounter an `AutoComplete`, we don't have direct access to the grandparent `DataReference`. There are various possible solutions, but the one currently employed takes advantage of the fact that the `fields` data has already been processed: so the `DataReference` stores the inherited label information in the corresponding field. Then when we are building the `AutoComplete` component, we can easily lookup that field and retrieve the label.

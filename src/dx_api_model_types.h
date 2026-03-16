@@ -17,10 +17,16 @@ struct field_t
     std::string type;
     std::string data;
     std::string json;
+    std::string inherited_label;
 
     bool is_special = false;
     bool is_class_key = false;
     bool is_dirty = false;
+
+    // Below are used with dropdowns. Provides keys, values, and the selected item.
+    std::vector<std::string> item_keys;
+    std::vector<std::string> item_values;
+    size_t item_selected_idx;
 };
 using field_map_t = std::unordered_map<std::string, field_t>;
 
@@ -40,12 +46,14 @@ enum component_type_t
     component_type_view,
 
     // Fields:
+    component_type_autocomplete,
     component_type_currency,
     component_type_text_area,
     component_type_text_input,
 
     // Templates:
     component_type_default_form,
+    component_type_data_reference,
 
     // Widgets:
     // ...nothing yet!
@@ -62,10 +70,12 @@ constexpr std::array<const char*, component_type_count> component_type_strings =
     "Reference",
     "Region",
     "View",
+    "AutoComplete",
     "Currency",
     "TextArea",
     "TextInput",
-    "DefaultForm"
+    "DefaultForm",
+    "DataReference"
 };
 
 static_assert(decltype(component_type_strings)().size() == component_type_count,
