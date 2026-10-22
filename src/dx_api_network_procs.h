@@ -129,11 +129,16 @@ auto handle_request(net_call_t& call) -> void
         auto client = init_call_and_create_client(call, http_method_patch, "/assignments/", call.id1, "/actions/", call.id2);
         httplib::Headers request_headers =
         {
-            //{ "if-match", call.etag }
             { "If-Match", call.etag }
         };
         call.request_headers = to_string(request_headers);
         auto result = client.Patch(call.endpoint, request_headers, call.request_body, "application/json");
+        set_call_output(call, result);
+    } break;
+    case net_call_type_t::data_views:
+    {
+        auto client = init_call_and_create_client(call, http_method_post, "/data_views/", call.id1);
+        auto result = client.Post(call.endpoint, call.request_body, "application/json");
         set_call_output(call, result);
     } break;
     }
@@ -382,6 +387,36 @@ auto submit_open_assignment_action(app_context_t& app) -> void
     {
         call.request_body = body.dump(json_indent);
     }
+
+    std::scoped_lock lock(app.dx_request_mutex);
+    app.dx_request_queue.push(call);
+}
+
+// Pushes a network call to retrieve fields from a data page.
+auto data_views(app_context_t& app, std::string_view data_page, std::span<std::string_view> fields) -> void
+{
+    using json = nlohmann::json;
+
+    auto call = make_net_call(app, net_call_type_t::data_views);
+    call.id1 = data_page;
+
+    json body;
+    body["dataViewParameters"] = json();
+    body["paging"] = json("{ \"paging\" : {\"pageNumber\" : 1, \"pageSize\" : 50 } }");
+
+    json query;
+    query["distinctResultsOnly"] = "true";
+
+    std::vector<std::pair<const char*, std::string_view>> select_fields;
+    for (const auto& field : fields)
+    {
+        select_fields.push_back(std::pair{ "field", field });
+    }
+    query["select"] = json(select_fields);
+
+    body["query"] = query;
+
+    call.request_body = body.dump(json_indent);
 
     std::scoped_lock lock(app.dx_request_mutex);
     app.dx_request_queue.push(call);

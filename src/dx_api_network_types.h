@@ -57,7 +57,8 @@ enum struct net_call_type_t
     create_case,
     open_assignment,
     open_assignment_action,
-    submit_assignment_action
+    submit_assignment_action,
+    data_views
 };
 
 // Megastruct representation of a DX API call. Main thread provides call type and appropriate
@@ -75,6 +76,8 @@ struct net_call_t
     std::string server;
     std::string user_id;
     std::string work_type_id;
+    std::string select_key; 
+    std::string select_value;
 
     // Input/Output:
     std::string access_token;

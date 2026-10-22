@@ -287,6 +287,13 @@ auto draw_component_r(component_t& component, resources_t& resources, int& id, s
                 auto& display_string = field.item_values[field.item_selected_idx];
                 if (ImGui::BeginCombo(component.label.c_str(), display_string.c_str()))
                 {
+                    if (!component.is_open)
+                    {
+                        // TODO: Here is where we should retrieve our data.
+                        ImGui::DebugLog("Opened...\n");
+                        component.is_open = true;
+                    }
+
                     for (int n = 0; n < field.item_values.size(); n++)
                     {
                         const bool is_selected = (field.item_selected_idx == n);
@@ -301,6 +308,10 @@ auto draw_component_r(component_t& component, resources_t& resources, int& id, s
                             ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
+                }
+                else
+                {
+                    component.is_open = false;
                 }
             }
             else

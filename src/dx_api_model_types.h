@@ -102,6 +102,7 @@ struct component_t
     bool is_disabled = false;
     bool is_broken = false;
     bool is_selected = false;
+    bool is_open = false; // True when e.g. a dropdown is expanded.
 
     component_type_t ref_type = component_type_t::component_type_unspecified; // Referenced component / type of template.
     component_list_t children;
