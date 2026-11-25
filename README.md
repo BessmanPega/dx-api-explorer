@@ -8,6 +8,8 @@ https://github.com/user-attachments/assets/39a573e8-dd27-4138-9664-4566b90eab43
 
 This app helps you understand [Pega's Constellation DX API](https://docs.pega.com/bundle/dx-api/page/platform/dx-api/dx-api-version-2-con.html) by showing it in action. It's a desktop application that let's you work through a [case](https://docs.pega.com/bundle/platform/page/platform/case-management/case-management-overview.html), providing detailed developer information so you know *exactly* what the DX API is doing every step of the way.
 
+It also ships a bonus, lightweight implementation in a [single HTML file](dx_api_explorer.html) that Claude generates from the `C++` source with the included `/sync-html` [skill](.claude/skills/sync-html).
+
 ## Key points
 
 - Custom front-end to [Pega Infinity](https://www.pega.com/infinity) applications that use [Constellation UI](https://docs.pega.com/bundle/platform/page/platform/user-experience/constellation-architecture.html).
