@@ -1,9 +1,10 @@
 """Tiny mock Pega DX API server for smoke-testing dx_api_explorer.html.
 
-Serves the repo's dx_api_explorer.html at http://localhost:<port>/ with CONFIG
-filled in (so the page auto-logs in), answers the DX API calls with canned
-responses, and prints every request it receives (request line, headers, body)
-to stdout, which shows what is actually on the wire.
+Serves the repo's dx_api_explorer.html (unmodified) at http://localhost:<port>/,
+prints a config JSON at startup to paste into (or save and drop onto) the
+page's config textarea, answers the DX API calls with canned responses, and
+prints every request it receives (request line, headers, body) to stdout,
+which shows what is actually on the wire.
 
 Scripted flow: login -> casetypes ("Widget") -> create case -> open action
 (step 1) -> submit -> open action (step 2) -> submit -> case resolved.
@@ -12,7 +13,6 @@ Usage:  python -I mock_pega.py [port]      (default port 8765)
 Extend the canned responses below when testing newly ported components.
 """
 import json
-import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -22,11 +22,11 @@ HTML = Path(__file__).resolve().parents[3] / "dx_api_explorer.html"
 
 CONFIG = {
     "server": f"http://localhost:{PORT}",
-    "dxApiPath": "/prweb/api/application/v2",
-    "tokenEndpoint": "/prweb/PRRestService/oauth2/v1/token",
-    "clientId": "cid",
-    "clientSecret": "sec",
-    "userId": "user@example",
+    "dx_api_path": "/prweb/api/application/v2",
+    "token_endpoint": "/prweb/PRRestService/oauth2/v1/token",
+    "client_id": "cid",
+    "client_secret": "sec",
+    "user_id": "user@example",
     "password": "p+w d",  # '+' and ' ' check that the login body is sent verbatim.
 }
 
@@ -71,15 +71,6 @@ UI_RESOURCES = {
 }
 
 
-def page():
-    html = HTML.read_text(encoding="utf-8")
-    config_js = "const CONFIG = " + json.dumps(CONFIG, indent=4) + ";"
-    html, n = re.subn(r"const CONFIG = \{[\s\S]*?\n\};", lambda _: config_js, html, count=1)
-    if n != 1:
-        raise RuntimeError("Could not find the CONFIG block in dx_api_explorer.html")
-    return html.encode("utf-8")
-
-
 class Handler(BaseHTTPRequestHandler):
     submits = 0
 
@@ -101,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             Handler.submits = 0  # Reloading the page restarts the script.
-            return self.reply(page(), "text/html; charset=utf-8")
+            return self.reply(HTML.read_bytes(), "text/html; charset=utf-8")
         if self.path == "/favicon.ico":
             self.send_response(404); self.end_headers(); return
         self.log_wire()
@@ -116,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.log_wire()
-        if self.path == CONFIG["tokenEndpoint"]:
+        if self.path == CONFIG["token_endpoint"]:
             return self.reply({"access_token": "TOKEN123", "token_type": "bearer"})
         if self.path.endswith("/cases"):
             return self.reply({"data": {"caseInfo": case_info()}})
@@ -135,4 +126,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Mock Pega on http://localhost:{PORT}/  (serving {HTML})", flush=True)
+    print("Paste this into the page's config textarea:\n" + json.dumps(CONFIG, indent=2) + "\n" + "-" * 60, flush=True)
     HTTPServer(("localhost", PORT), Handler).serve_forever()

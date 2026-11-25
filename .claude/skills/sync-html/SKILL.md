@@ -10,8 +10,9 @@ the C++ app. It covers config, login, listing case types, creating a case,
 opening the assignment action, rendering the form, submitting, and chaining into
 the next assignment. The C++ code is the source of truth. The HTML follows it.
 
-The author deploys the file to the same server as the Pega instance (same origin)
-for demos, with the `CONFIG` block filled in.
+It's a utilitarian tool for exploring the DX API, not a polished demo. It's
+deployed on the same server as the Pega instance (same origin). The HTML
+contains no connection details: users paste or drop a config JSON at runtime.
 
 ## Workflow
 
@@ -47,7 +48,8 @@ for demos, with the `CONFIG` block filled in.
 | `validate_component_r` | `validateComponent` |
 | `draw_component_r` | `renderComponent` |
 | `dx_api_helper_procs.h` `to_bool`, `to_enum` | `toBool`, `toComponentType` |
-| `dx_api_draw_procs.h` login form / case type menu / action Submit | config `<details>`, `loadCaseTypes` buttons, `openAssignmentAction` |
+| `dx_api_draw_procs.h` login form / case type menu / action Submit | config `<details>` + textarea, `loadCaseTypes` buttons, `openAssignmentAction` |
+| `dx_api_helper_procs.h` `read_config` / `write_config` | `normalizeConfig`, drop handler, `downloadConfig` (HTML-only format; see below) |
 
 When a new component type is added in C++, it usually touches all of
 `COMPONENT_TYPES`/`FIELD_TYPES`, `makeComponent`, `validateComponent`, and
@@ -89,24 +91,53 @@ like a bug, point it out to the user. Don't silently change it in the HTML.
 - After a submit, it chains into the next performable assignment the same way.
   Otherwise it shows a confirmation saying why it stopped.
 - AutoComplete renders as a plain text input (the C++ dropdown is still a stub).
-- There's no debug window, XRay, inspectors, logout, or config-file handling.
-  Traffic goes to `console.debug` with secrets masked.
-- **All errors go to the browser console only.** Nothing error-related is shown
-  on the page. Unsupported components go to `console.warn` and aren't rendered.
-- `CONFIG` stays the first script block in `<head>`. If every value is set, the
-  page auto-logs in with the form collapsed. Otherwise the form opens.
-- Vanilla HTML/JS, one file, no styling, no libraries.
+- There's no debug window, XRay, inspectors, or logout. Traffic goes to
+  `console.debug` with secrets masked.
+- **Connection config is a JSON textarea** with no auto-connect and nothing
+  hard-coded. It starts from a template (`server` = page origin, the usual
+  paths). You can edit or paste into it, or drop a `.json` file on it. **go**
+  validates and connects, **Download** validates and saves
+  `dx_api_explorer_config.json`. The keys are the C++ snake_case names, so C++
+  config files can be dropped in. Extra keys such as `font_index` are stripped.
+  Downloaded files don't need to work in the C++ app.
+- **Validation is `normalizeConfig`:** all 7 fields required, non-empty strings,
+  trimmed except `password`. `server` must be `scheme://host[:port]` only. Paths
+  must start with `/`, have no trailing `/`, and contain no `://`, `?`, `#` or
+  spaces. `dx_api_path` must end in `/api/application/v2`. Warnings, which don't
+  block: password whitespace, an unusual `token_endpoint`, and `server` differing
+  from the page origin. This strictness is deliberate (it saves workshop
+  attendees from typos), so keep it.
+- **Errors:** the details always go to the browser console. The only on-screen
+  error output is the generic `#problems` indicator ("There were problems. See
+  the browser console..."), shown by `run()` for any failure. When the config
+  itself is the problem, the textarea also gets `aria-invalid="true"`. Don't add
+  more on-screen error UI. Unsupported components go to `console.warn` and
+  aren't rendered.
+- **Reconnect race, accepted:** a request still in flight from the previous
+  connection can render after "go" is clicked again. A comment on `go()` has the
+  fix (a connection counter) in case it ever matters.
+
+## Styling
+
+- Classless pico.css is included through a `<link>` in `<head>`. Keep it.
+- Everything stays inside `<main>`.
+- Use plain semantic elements: no classes, no inline styles, no extra
+  libraries. Pico styles `aria-invalid` and `<small>` for free.
+- A sync shouldn't touch styling.
 
 ## Verifying
 
-`mock_pega.py` (next to this file) serves the repo's `dx_api_explorer.html` with
-`CONFIG` filled in. It plays a two-step case (login, casetypes, create, action 1,
-submit, action 2, submit, resolved) and prints every raw request to stdout.
+`mock_pega.py` (next to this file) serves the repo's `dx_api_explorer.html`
+unmodified, and prints a ready-made config JSON at startup. It plays a two-step
+case (login, casetypes, create, action 1, submit, action 2, submit, resolved)
+and prints every raw request to stdout.
 
 1. Run it in the background: `python -I .claude/skills/sync-html/mock_pega.py`
    (default port 8765).
-2. Open `http://localhost:8765/` in the browser pane. Click the case type and
-   Submit through both steps (or drive it with JS), and check the console for errors.
+2. Open `http://localhost:8765/` in the browser pane. Put the printed config in
+   the textarea, click **go**, then click the case type and Submit through both
+   steps (or drive it all with JS). Check the console for errors, and check
+   that `#problems` stays hidden.
 3. Read the server's output to confirm the request lines, headers and bodies
    follow the "Wire fidelity" rules. In particular check the `%20`/`!` path
    encoding, the `If-Match` ETag per step, and the verbatim login body.

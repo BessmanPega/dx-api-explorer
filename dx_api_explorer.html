@@ -4,38 +4,26 @@
 <head>
 <meta charset="utf-8">
 <title>DX API Explorer</title>
-<script>
-// ======================= ACCESS CONFIG: EDIT THESE =======================
-// If every value below is filled in, the page skips the connection form and
-// logs in immediately. If any value is empty, the form is shown instead
-// (pre-filled with whatever values are set here).
-const CONFIG = {
-    server:        "",  // e.g. "https://my-pega-instance.example.com" (no trailing slash)
-    dxApiPath:     "",  // e.g. "/prweb/api/application/v2"
-    tokenEndpoint: "",  // e.g. "/prweb/PRRestService/oauth2/v1/token"
-    clientId:      "",
-    clientSecret:  "",
-    userId:        "",
-    password:      "",
-};
-// =========================================================================
-</script>
+<!-- Styling is intentionally just classless pico.css: keep this link, keep all
+     content inside <main>, and use plain semantic elements (no classes or
+     inline styles). -->
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.classless.slate.min.css"
+>
 </head>
 <body>
-
+<main>
 <h1>DX API Explorer</h1>
 
 <details id="config">
     <summary>Connection</summary>
-    <p><label>Server <input id="server" size="60"></label></p>
-    <p><label>DX API Path <input id="dxApiPath" size="60"></label></p>
-    <p><label>Token Endpoint <input id="tokenEndpoint" size="60"></label></p>
-    <p><label>Client ID <input id="clientId" size="60"></label></p>
-    <p><label>Client Secret <input id="clientSecret" type="password" size="60"></label></p>
-    <p><label>User ID <input id="userId" size="60"></label></p>
-    <p><label>Password <input id="password" type="password" size="60"></label></p>
-    <p><button id="go">go</button></p>
+    <label for="configText">Config JSON: edit, paste, or drop a .json file here</label>
+    <textarea id="configText" rows="10" spellcheck="false" autocomplete="off"></textarea>
+    <p><button id="go">go</button> <button id="download">Download</button></p>
 </details>
+
+<p id="problems" hidden><small>There were problems. See the browser console for details.</small></p>
 
 <div id="caseTypes"></div>
 <div id="action"></div>
@@ -43,13 +31,14 @@ const CONFIG = {
 <script>
 "use strict";
 
-// All errors go to the browser console; nothing error-related is shown on the page.
-// Request/response traffic is logged at console.debug level (enable "Verbose" to see it).
-
-const CONFIG_KEYS = ["server", "dxApiPath", "tokenEndpoint", "clientId", "clientSecret", "userId", "password"];
+// Error details (config validation, network, parsing) go to the browser
+// console. The only on-screen error output is the generic #problems indicator,
+// plus aria-invalid on the config textarea when the config itself is the
+// problem. Request/response traffic is logged at console.debug level (enable
+// "Verbose" to see it).
 
 const state = {
-    cfg: null,          // Connection values in use (read from the form on "go").
+    cfg: null,          // Normalized connection config in use (set on "go").
     accessToken: "",
     assignmentId: "",   // Currently open assignment action...
     actionId: "",
@@ -147,15 +136,15 @@ async function send(method, path, headers, body, logBody = body) {
 // The body is built with plain string formatting, as std::format does in
 // the C++ code; nothing extra is encoded.
 async function requestToken() {
-    const { tokenEndpoint, clientId, clientSecret, userId, password } = state.cfg;
-    const body = `grant_type=password&username=${userId}&password=${password}`;
+    const { token_endpoint, client_id, client_secret, user_id, password } = state.cfg;
+    const body = `grant_type=password&username=${user_id}&password=${password}`;
     const headers = {
         "Accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": "Basic " + base64Utf8(`${clientId}:${clientSecret}`),
+        "Authorization": "Basic " + base64Utf8(`${client_id}:${client_secret}`),
     };
-    return send("POST", tokenEndpoint, headers,
-                body, `grant_type=password&username=${userId}&password=<redacted>`);
+    return send("POST", token_endpoint, headers,
+                body, `grant_type=password&username=${user_id}&password=<redacted>`);
 }
 
 // Every other call: init_call_and_create_client() sets bearer auth, and the
@@ -169,7 +158,7 @@ async function dx(method, pathPieces, body, extraHeaders = {}) {
         ...extraHeaders,
     };
     if (method !== "GET") headers["Content-Type"] = "application/json";
-    return send(method, state.cfg.dxApiPath + pathPieces.join(""), headers, body);
+    return send(method, state.cfg.dx_api_path + pathPieces.join(""), headers, body);
 }
 
 // nlohmann's dump(2) and JSON.stringify(x, null, 2) both indent 2 and use ": ".
@@ -499,11 +488,163 @@ function renderComponent(c, model, parent) {
 }
 
 // =========================================================================
+// Connection config: the textarea holds a JSON object with these keys (the
+// same names as the C++ app's dx_api_explorer_config.json, so those files can
+// be dropped in; any other keys, e.g. font_index, are stripped).
+// =========================================================================
+
+const CONFIG_FIELDS = ["server", "dx_api_path", "token_endpoint", "client_id", "client_secret", "user_id", "password"];
+
+// Thrown after the details have already been logged; run() just shows the indicator.
+class LoggedError extends Error {}
+
+const pageOrigin = location.protocol.startsWith("http") ? location.origin : ""; // "" when opened from disk.
+
+// Starting template. The page normally sits on the Pega server itself, so
+// default to this origin and the usual paths (see README "Connection").
+function configTemplate() {
+    return {
+        server: pageOrigin,
+        dx_api_path: "/prweb/api/application/v2",
+        token_endpoint: "/prweb/PRRestService/oauth2/v1/token",
+        client_id: "",
+        client_secret: "",
+        user_id: "",
+        password: "",
+    };
+}
+
+const formatConfig = cfg => JSON.stringify(cfg, null, 2);
+
+// Parses, strips unknown keys, trims, and validates config JSON text. Logs
+// warnings and all errors to the console. Returns the clean config, or null.
+function normalizeConfig(text) {
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    } catch (e) {
+        console.error(`Config is not well-formed JSON: ${e.message}`);
+        return null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        console.error("Config must be a JSON object.");
+        return null;
+    }
+
+    const errors = [];
+    const warnings = [];
+    const cfg = {};
+
+    const extra = Object.keys(parsed).filter(k => !CONFIG_FIELDS.includes(k));
+    if (extra.length) console.info(`Config: ignoring extra keys: ${extra.join(", ")}`);
+
+    for (const k of CONFIG_FIELDS) {
+        if (!(k in parsed)) { errors.push(`${k}: missing.`); continue; }
+        let v = parsed[k];
+        if (typeof v !== "string") { errors.push(`${k}: must be a string.`); continue; }
+        if (k === "password") {
+            if (v !== v.trim()) warnings.push("password: has leading/trailing whitespace (kept as-is).");
+        } else {
+            v = v.trim();
+        }
+        if (v === "") { errors.push(`${k}: must not be empty.`); continue; }
+        cfg[k] = v;
+    }
+
+    if (cfg.server) {
+        let url = null;
+        try { url = new URL(cfg.server); } catch {
+            errors.push("server: not a valid URL (expected e.g. https://my-pega-instance.example.com).");
+        }
+        if (url) {
+            if (url.protocol !== "http:" && url.protocol !== "https:") {
+                errors.push("server: must start with http:// or https://.");
+            } else if (cfg.server.endsWith("/") || url.pathname !== "/" || url.search || url.hash) {
+                errors.push("server: must be just scheme://host[:port], with no path or trailing slash.");
+            } else if (pageOrigin && url.origin !== pageOrigin) {
+                warnings.push(`server: ${url.origin} differs from this page's origin (${pageOrigin}); ` +
+                              "the browser will likely block the requests (CORS).");
+            }
+        }
+    }
+
+    const examples = configTemplate();
+    for (const k of ["dx_api_path", "token_endpoint"]) {
+        const v = cfg[k];
+        if (!v) continue;
+        if (v.includes("://")) {
+            errors.push(`${k}: should be a path only (e.g. ${examples[k]}), not a full URL; the host goes in server.`);
+            continue;
+        }
+        if (!v.startsWith("/")) errors.push(`${k}: must start with "/".`);
+        if (v.endsWith("/")) errors.push(`${k}: must not end with "/".`);
+        if (/[?#\s]/.test(v)) errors.push(`${k}: must not contain "?", "#", or whitespace.`);
+    }
+    if (cfg.dx_api_path && !cfg.dx_api_path.endsWith("/api/application/v2")) {
+        errors.push('dx_api_path: must end with "/api/application/v2" ' +
+                    "(e.g. /prweb/api/application/v2 or /prweb/app/{app-alias}/api/application/v2).");
+    }
+    if (cfg.token_endpoint && !cfg.token_endpoint.endsWith("/oauth2/v1/token")) {
+        warnings.push('token_endpoint: usually ends with "/oauth2/v1/token"; double-check it.');
+    }
+
+    for (const w of warnings) console.warn(`Config: ${w}`);
+    if (errors.length) {
+        console.error(`Config has ${errors.length} problem(s):\n- ${errors.join("\n- ")}`);
+        return null;
+    }
+    return cfg;
+}
+
+// Validates the textarea. On success rewrites it in normalized form and
+// returns the config; on failure marks it invalid and throws LoggedError.
+function useConfigText() {
+    const textarea = document.getElementById("configText");
+    const cfg = normalizeConfig(textarea.value);
+    if (!cfg) {
+        textarea.setAttribute("aria-invalid", "true");
+        throw new LoggedError();
+    }
+    textarea.value = formatConfig(cfg);
+    return cfg;
+}
+
+// Drop a file on the textarea: show its raw contents, then validate.
+// (Dragged text, as opposed to a file, keeps the browser's default insert.)
+async function loadDroppedFile(file) {
+    document.getElementById("configText").value = await file.text();
+    useConfigText();
+}
+
+// Saves the (validated) textarea config as a .json file. Doesn't connect.
+function downloadConfig() {
+    const cfg = useConfigText();
+    const blob = new Blob([formatConfig(cfg) + "\n"], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "dx_api_explorer_config.json";
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+
+// =========================================================================
 // Flow.
 // =========================================================================
 
+// Known limitation, accepted for demo use: if a request from the previous
+// connection is still in flight when "go" is clicked again, its response can
+// still render after the reset (e.g. a form from the old case). If that ever
+// matters: bump a connection counter here, and have each step bail out after
+// an await if the counter has changed.
 async function go() {
-    state.cfg = Object.fromEntries(CONFIG_KEYS.map(k => [k, document.getElementById(k).value]));
+    state.cfg = useConfigText(); // Throws (no connection attempt) if invalid.
+    state.accessToken = "";
+    state.assignmentId = "";
+    state.actionId = "";
+    state.etag = "";
+    state.model = null;
     document.getElementById("caseTypes").replaceChildren();
     document.getElementById("action").replaceChildren();
 
@@ -582,8 +723,7 @@ async function openAssignmentAction(assignmentId, actionId) {
 async function submitAction() {
     const model = state.model;
     if (!validateComponent(model.components[model.rootKey], model)) {
-        console.error("Validation failed. Did you fill out all required fields?");
-        return;
+        throw new Error("Validation failed. Did you fill out all required fields?");
     }
 
     // Port of submit_open_assignment_action(): dirty, non-special,
@@ -616,21 +756,38 @@ async function submitAction() {
     document.getElementById("action").replaceChildren(msg);
 }
 
-// Runs an async step, sending any failure to the console.
+// Runs a (sync or async) step. Clears the indicator first; on failure, logs
+// the error to the console (unless already logged) and shows the indicator.
 function run(step) {
-    step().catch(err => console.error(err));
+    const problems = document.getElementById("problems");
+    problems.hidden = true;
+    document.getElementById("configText").removeAttribute("aria-invalid");
+    Promise.resolve().then(step).catch(err => {
+        if (!(err instanceof LoggedError)) console.error(err);
+        problems.hidden = false;
+    });
 }
 
-// Startup: pre-fill the form; if everything is configured, skip straight in.
-for (const k of CONFIG_KEYS) document.getElementById(k).value = CONFIG[k];
+// Startup: show the template and wait for "go". No auto-connect.
+const configText = document.getElementById("configText");
+configText.value = formatConfig(configTemplate());
+document.getElementById("config").open = true;
+
 document.getElementById("go").addEventListener("click", () => run(go));
+document.getElementById("download").addEventListener("click", () => run(downloadConfig));
 
-if (CONFIG_KEYS.every(k => CONFIG[k] !== "")) {
-    document.getElementById("config").open = false;
-    run(go);
-} else {
-    document.getElementById("config").open = true;
-}
+configText.addEventListener("drop", e => {
+    const file = e.dataTransfer?.files[0];
+    if (!file) return;
+    e.preventDefault();
+    run(() => loadDroppedFile(file));
+});
+
+// A file dropped anywhere else would make the browser open it and navigate
+// away from the page; swallow those.
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { if (e.dataTransfer?.files.length) e.preventDefault(); });
 </script>
+</main>
 </body>
 </html>
