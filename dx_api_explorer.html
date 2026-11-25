@@ -1,0 +1,636 @@
+<!doctype html>
+<!-- SYNCED-WITH: bb67513  (C++ commit this file was last ported from; see .claude/skills/sync-html/SKILL.md) -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>DX API Explorer</title>
+<script>
+// ======================= ACCESS CONFIG: EDIT THESE =======================
+// If every value below is filled in, the page skips the connection form and
+// logs in immediately. If any value is empty, the form is shown instead
+// (pre-filled with whatever values are set here).
+const CONFIG = {
+    server:        "",  // e.g. "https://my-pega-instance.example.com" (no trailing slash)
+    dxApiPath:     "",  // e.g. "/prweb/api/application/v2"
+    tokenEndpoint: "",  // e.g. "/prweb/PRRestService/oauth2/v1/token"
+    clientId:      "",
+    clientSecret:  "",
+    userId:        "",
+    password:      "",
+};
+// =========================================================================
+</script>
+</head>
+<body>
+
+<h1>DX API Explorer</h1>
+
+<details id="config">
+    <summary>Connection</summary>
+    <p><label>Server <input id="server" size="60"></label></p>
+    <p><label>DX API Path <input id="dxApiPath" size="60"></label></p>
+    <p><label>Token Endpoint <input id="tokenEndpoint" size="60"></label></p>
+    <p><label>Client ID <input id="clientId" size="60"></label></p>
+    <p><label>Client Secret <input id="clientSecret" type="password" size="60"></label></p>
+    <p><label>User ID <input id="userId" size="60"></label></p>
+    <p><label>Password <input id="password" type="password" size="60"></label></p>
+    <p><button id="go">go</button></p>
+</details>
+
+<div id="caseTypes"></div>
+<div id="action"></div>
+
+<script>
+"use strict";
+
+// All errors go to the browser console; nothing error-related is shown on the page.
+// Request/response traffic is logged at console.debug level (enable "Verbose" to see it).
+
+const CONFIG_KEYS = ["server", "dxApiPath", "tokenEndpoint", "clientId", "clientSecret", "userId", "password"];
+
+const state = {
+    cfg: null,          // Connection values in use (read from the form on "go").
+    accessToken: "",
+    assignmentId: "",   // Currently open assignment action...
+    actionId: "",
+    etag: "",
+    model: null,        // ...and its parsed DX response.
+};
+
+// =========================================================================
+// Network layer. Each request is built to match what cpp-httplib 0.16.0
+// puts on the wire in src/dx_api_network_procs.h.
+// =========================================================================
+
+// Port of httplib's detail::encode_url(). httplib applies this to every
+// request path (url_encode_ defaults to true) and percent-encodes only these
+// characters plus non-ASCII bytes. Everything else (including '!', '/', '#',
+// '?') goes out raw, which matters for IDs like
+// "ASSIGN-WORKLIST MYORG-MYCO-WORK-MYCASE C-123!MY_FLOW".
+// Don't swap in encodeURIComponent(): it encodes a different set of characters.
+function encodeUrl(s) {
+    let out = "";
+    for (const b of new TextEncoder().encode(s)) {
+        switch (b) {
+        case 0x20: out += "%20"; break; // ' '
+        case 0x2B: out += "%2B"; break; // '+'
+        case 0x0D: out += "%0D"; break; // '\r'
+        case 0x0A: out += "%0A"; break; // '\n'
+        case 0x27: out += "%27"; break; // '\''
+        case 0x2C: out += "%2C"; break; // ','
+        case 0x3B: out += "%3B"; break; // ';'
+        default:
+            out += b >= 0x80
+                ? "%" + b.toString(16).toUpperCase().padStart(2, "0")
+                : String.fromCharCode(b);
+        }
+    }
+    return out;
+}
+
+// httplib base64-encodes the raw bytes of "user:pass"; btoa() alone would
+// reject non-Latin-1 characters, so go through UTF-8 bytes first.
+function base64Utf8(s) {
+    let bin = "";
+    for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+    return btoa(bin);
+}
+
+// Copies headers for logging with credentials masked.
+function redactHeaders(headers) {
+    const copy = { ...headers };
+    if (copy.Authorization) copy.Authorization = copy.Authorization.split(" ")[0] + " <redacted>";
+    return copy;
+}
+
+// Sends one request. `path` is the unencoded path, exactly as the C++ code
+// builds call.endpoint. Resolves with { status, etag, text, json }.
+async function send(method, path, headers, body, logBody = body) {
+    const url = state.cfg.server + encodeUrl(path);
+    const init = {
+        method,
+        headers,
+        body,                   // undefined => no body (fetch rejects a body on GET).
+        credentials: "omit",    // httplib sends no cookies; don't let a browser Pega session ride along.
+        cache: "no-store",      // httplib has no cache.
+        redirect: "manual",     // httplib's follow_location_ defaults to false.
+    };
+
+    console.debug(`${method} ${url}`, { headers: redactHeaders(headers), body: logBody });
+
+    const res = await fetch(url, init);
+    const text = await res.text();
+    const etag = res.headers.get("ETag") || "";
+
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON body; handled below */ }
+
+    console.debug(`-> ${res.status} ${method} ${url}`, {
+        headers: Object.fromEntries(res.headers.entries()),
+        body: json ?? text,
+    });
+
+    if (res.type === "opaqueredirect") {
+        throw new Error(`${method} ${url}: server responded with a redirect, which is not followed.`);
+    }
+    if (!res.ok) {
+        throw new Error(`${method} ${url}: HTTP ${res.status}\n${text}`);
+    }
+    if (json === null) {
+        throw new Error(`${method} ${url}: response body is not JSON:\n${text}`);
+    }
+    return { status: res.status, etag, text, json };
+}
+
+// login: httplib Client with set_basic_auth(client_id, client_secret), then
+// Post(endpoint, {Accept: application/json}, body, "application/x-www-form-urlencoded").
+// The body is built with plain string formatting, as std::format does in
+// the C++ code; nothing extra is encoded.
+async function requestToken() {
+    const { tokenEndpoint, clientId, clientSecret, userId, password } = state.cfg;
+    const body = `grant_type=password&username=${userId}&password=${password}`;
+    const headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": "Basic " + base64Utf8(`${clientId}:${clientSecret}`),
+    };
+    return send("POST", tokenEndpoint, headers,
+                body, `grant_type=password&username=${userId}&password=<redacted>`);
+}
+
+// Every other call: init_call_and_create_client() sets bearer auth, and the
+// path is dx_api_path + the pieces. POST/PATCH always pass "application/json"
+// as the content type (httplib sets the header even when the body is empty,
+// and sends Content-Length: 0). Accept is httplib's default "*/*".
+async function dx(method, pathPieces, body, extraHeaders = {}) {
+    const headers = {
+        "Accept": "*/*",
+        "Authorization": "Bearer " + state.accessToken,
+        ...extraHeaders,
+    };
+    if (method !== "GET") headers["Content-Type"] = "application/json";
+    return send(method, state.cfg.dxApiPath + pathPieces.join(""), headers, body);
+}
+
+// nlohmann's dump(2) and JSON.stringify(x, null, 2) both indent 2 and use ": ".
+// nlohmann objects are std::map-backed, so keys come out sorted.
+function dumpJson(obj) {
+    return JSON.stringify(sortKeys(obj), null, 2);
+}
+function sortKeys(v) {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === "object") {
+        const out = {};
+        for (const k of Object.keys(v).sort()) out[k] = sortKeys(v[k]);
+        return out;
+    }
+    return v;
+}
+
+// =========================================================================
+// Model: port of parse_dx_response(), make_component_r() and their helpers
+// (src/dx_api_model_procs.h, src/dx_api_component_type_procs.cpp).
+// =========================================================================
+
+const COMPONENT_TYPES = ["Reference", "Region", "View", "AutoComplete", "Currency",
+                         "TextArea", "TextInput", "DefaultForm", "DataReference"];
+const FIELD_TYPES = ["AutoComplete", "Currency", "TextArea", "TextInput"];
+
+// to_enum(): case-insensitive match, otherwise "Unknown".
+function toComponentType(str) {
+    const lower = String(str).toLowerCase();
+    return COMPONENT_TYPES.find(t => t.toLowerCase() === lower) ?? "Unknown";
+}
+
+// to_bool(): true for boolean true or the string "true" (any case).
+function toBool(v) {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "string") return v.toLowerCase() === "true";
+    return false;
+}
+
+const makeKey = (classId, name) => `${classId}.${name}`;
+
+// Content values are flattened to strings the way parse_dx_response() does it.
+function contentToString(v) {
+    if (typeof v === "string") return v;
+    if (typeof v === "number") {
+        if (Number.isInteger(v)) return String(v);
+        // std::to_string(double) is "%f" (6 decimals), then trailing zeros are trimmed.
+        const s = v.toFixed(6);
+        return s.slice(0, s.search(/0*$/));
+    }
+    if (typeof v === "boolean") return v ? "1" : "0"; // std::to_string(bool)
+    return "";                                        // null/objects/arrays: left empty
+}
+
+function getContent(content, classId, name, strict = true) {
+    if ("classID" in content) {
+        if (content.classID === classId) {
+            if (name in content) return content[name];
+            if (strict) throw new Error(`Could not resolve name: ${name}\nName not found in content.`);
+        } else if (strict) {
+            throw new Error(`Could not resolve name: ${name}\ncontent['classID'] = ${content.classID}\nclass_id = ${classId}`);
+        }
+    } else if (strict) {
+        throw new Error(`Could not resolve name: ${name}\ncontent does not contain 'classID'`);
+    }
+    return "";
+}
+
+// "@P .Blah" -> "Blah" (or its content value when dereferencing); anything else as-is.
+function resolveName(raw, content, classId, deref = true) {
+    if (raw.length >= 2 && raw.slice(0, 2) === "@P") {
+        const name = raw.slice(4);
+        return deref ? getContent(content, classId, name) : name;
+    }
+    return raw;
+}
+
+// "@L Blah" -> "Blah"; "@FL .Blah" -> label of field Blah; anything else as-is.
+function resolveLabel(raw, fields, classId) {
+    if (raw && raw[0] === "@") {
+        if (raw[1] === "L") return raw.slice(3);
+        if (raw[1] === "F" && raw[2] === "L") {
+            const key = makeKey(classId, raw.slice(5));
+            if (!(key in fields)) throw new Error(`Label references unknown field: ${key}`);
+            return fields[key].label;
+        }
+    }
+    return raw;
+}
+
+function parseDxResponse(j) {
+    const info = j.data.caseInfo;
+    const model = {
+        caseInfo: {
+            id: info.ID,
+            businessId: info.businessID,
+            name: info.name,
+            status: info.status,
+            assignments: (info.assignments ?? []).map(a => ({
+                id: a.ID,
+                name: a.name,
+                canPerform: toBool(a.canPerform),
+                actions: (a.actions ?? []).map(x => ({ id: x.ID, name: x.name, type: x.type })),
+            })),
+            content: {},
+        },
+        fields: {},
+        components: {},
+        rootKey: "",
+    };
+
+    for (const [k, v] of Object.entries(info.content ?? {})) {
+        model.caseInfo.content[k] = contentToString(v);
+    }
+
+    if (j.uiResources) {
+        const ui = j.uiResources;
+        const resources = ui.resources;
+        // nlohmann iterates objects in sorted key order; do the same, since
+        // building components can mutate fields (inherited labels).
+        const sortedEntries = o => Object.entries(o ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+        for (const [id, arr] of sortedEntries(resources.fields)) {
+            for (const value of arr) {
+                if (String(value.type).toLowerCase() === "unknown") continue;
+                const field = {
+                    id,
+                    classId: value.classID,
+                    type: value.type,
+                    label: value.label ?? "",
+                    isSpecial: "isSpecial" in value ? toBool(value.isSpecial) : false,
+                    isClassKey: "isClassKey" in value ? toBool(value.isClassKey) : false,
+                    inheritedLabel: "",
+                    isDirty: false,
+                    data: "",
+                };
+                field.data = getContent(model.caseInfo.content, field.classId, id, false);
+                model.fields[makeKey(field.classId, id)] = field;
+            }
+        }
+
+        for (const [, arr] of sortedEntries(resources.views)) {
+            for (const value of arr) {
+                const c = makeComponent(value, model, "");
+                model.components[c.key] = c;
+            }
+        }
+
+        const config = ui.root.config;
+        if (config.context !== "caseInfo.content") {
+            throw new Error(`Root component uses unsupported context: ${config.context}`);
+        }
+        if (config.type !== "view") {
+            throw new Error(`Root component uses unsupported type: ${config.type}`);
+        }
+        if (!("classID" in model.caseInfo.content)) {
+            throw new Error("Case content has no classID; cannot locate root view.");
+        }
+        model.rootKey = makeKey(model.caseInfo.content.classID, config.name);
+    }
+
+    return model;
+}
+
+function makeComponent(json, model, parentClassId) {
+    const content = model.caseInfo.content;
+    const c = {
+        type: toComponentType(json.type),
+        name: "",
+        classId: "",
+        key: "",
+        label: "",
+        isReadonly: false,
+        isRequired: false,
+        isDisabled: false,
+        isBroken: false,
+        brokenReason: "",
+        refType: "Unspecified",
+        children: [],
+        json,
+    };
+    const cfg = json.config ?? {};
+    const readFlags = () => {
+        if ("disabled" in cfg) c.isDisabled = toBool(cfg.disabled);
+        if ("readOnly" in cfg) c.isReadonly = toBool(cfg.readOnly);
+        if ("required" in cfg) c.isRequired = toBool(cfg.required);
+    };
+
+    switch (c.type) {
+    case "Unknown":
+        c.classId = parentClassId;
+        c.name = json.type;
+        break;
+    case "Reference":
+        c.classId = parentClassId;
+        c.name = resolveName(cfg.name, content, c.classId);
+        c.refType = toComponentType(cfg.type);
+        if ("context" in cfg) {
+            if (cfg.context.slice(0, 6) === "@CLASS") {
+                c.classId = cfg.context.slice(7);
+            } else {
+                c.isBroken = true;
+                c.brokenReason = `Unsupported context: ${cfg.context}`;
+            }
+        }
+        for (const prop of cfg.inheritedProps ?? []) {
+            if (prop.prop === "label") {
+                const fieldKey = cfg.ruleClass + cfg.authorContext;
+                if (!(fieldKey in model.fields)) throw new Error(`inheritedProps references unknown field: ${fieldKey}`);
+                model.fields[fieldKey].inheritedLabel = prop.value;
+            }
+        }
+        break;
+    case "Region":
+        c.classId = parentClassId;
+        c.name = resolveName(json.name, content, c.classId);
+        break;
+    case "View":
+        c.classId = json.classID;
+        c.name = resolveName(json.name, content, c.classId);
+        if ("template" in cfg) c.refType = toComponentType(cfg.template);
+        break;
+    case "AutoComplete": {
+        c.classId = parentClassId;
+        c.name = resolveName(cfg.contextPage, content, c.classId, false);
+        readFlags();
+        const key = makeKey(c.classId, c.name);
+        if (!(key in model.fields)) throw new Error(`AutoComplete references unknown field: ${key}`);
+        c.label = resolveLabel(model.fields[key].inheritedLabel, model.fields, c.classId);
+        break;
+    }
+    case "Currency":
+    case "TextArea":
+    case "TextInput":
+        c.classId = parentClassId;
+        c.name = resolveName(cfg.value, content, c.classId, false);
+        c.label = resolveLabel(cfg.label, model.fields, c.classId);
+        readFlags();
+        break;
+    default: // DefaultForm, DataReference: nothing extracted.
+        break;
+    }
+
+    if (!c.name || !c.classId) {
+        throw new Error(`Failed to make component from JSON:\n${JSON.stringify(json, null, 2)}`);
+    }
+    c.key = makeKey(c.classId, c.name);
+
+    for (const child of json.children ?? []) {
+        c.children.push(makeComponent(child, model, c.classId));
+    }
+    return c;
+}
+
+// Port of validate_component_r(): checks required fields among the component
+// and its direct children, recursively. Like the C++ version, it does not
+// follow References.
+function validateComponent(c, model) {
+    if (FIELD_TYPES.includes(c.type) && c.isRequired) {
+        const field = model.fields[c.key];
+        if (!field || field.data === "") return false;
+    }
+    return c.children.every(child => validateComponent(child, model));
+}
+
+// =========================================================================
+// Rendering: port of draw_component_r() using plain DOM elements.
+// =========================================================================
+
+function renderComponent(c, model, parent) {
+    switch (c.type) {
+    case "Reference": {
+        if (c.isBroken) {
+            console.warn(`Skipping broken reference ${c.key}: ${c.brokenReason}`);
+            return;
+        }
+        const target = model.components[c.key];
+        if (!target) throw new Error(`Reference to unknown view: ${c.key}`);
+        renderComponent(target, model, parent);
+        return;
+    }
+    case "AutoComplete":
+    case "Currency":
+    case "TextArea":
+    case "TextInput": {
+        const field = model.fields[c.key];
+        if (!field) throw new Error(`Component references unknown field: ${c.key}`);
+        const row = document.createElement("p");
+        const label = document.createElement("label");
+        const editable = !c.isReadonly && !c.isDisabled && !field.isSpecial && !field.isClassKey;
+
+        if (editable) {
+            // The C++ code marks every editable field it draws as dirty, so
+            // all of them are sent on submit, changed or not.
+            field.isDirty = true;
+            const input = document.createElement(c.type === "TextArea" ? "textarea" : "input");
+            input.value = field.data;
+            input.title = c.key;
+            // Fields are shared by key, so keep every input for the same field in sync.
+            input.dataset.fieldKey = c.key;
+            input.addEventListener("input", () => {
+                field.data = input.value;
+                for (const other of document.querySelectorAll("[data-field-key]")) {
+                    if (other !== input && other.dataset.fieldKey === c.key) other.value = input.value;
+                }
+            });
+            label.append(c.label + " ", input);
+            row.append(label);
+            if (c.isRequired) row.append(" *");
+        } else {
+            label.textContent = `${c.label}: ${field.data}`;
+            label.title = c.key;
+            row.append(label);
+        }
+        parent.append(row);
+        return;
+    }
+    default: {
+        if (c.type === "Unknown") console.warn(`Unsupported component type: ${c.name}`, c.json);
+        if (c.type === "View" && (c.refType === "Unspecified" || c.refType === "Unknown")) {
+            console.warn(`View ${c.key} has an unsupported template (${c.json.config?.template}); children skipped.`);
+            return;
+        }
+        for (const child of c.children) renderComponent(child, model, parent);
+    }
+    }
+}
+
+// =========================================================================
+// Flow.
+// =========================================================================
+
+async function go() {
+    state.cfg = Object.fromEntries(CONFIG_KEYS.map(k => [k, document.getElementById(k).value]));
+    document.getElementById("caseTypes").replaceChildren();
+    document.getElementById("action").replaceChildren();
+
+    const tokenRes = await requestToken();
+    if (!tokenRes.json.access_token) throw new Error("Failed to login: No access token received.");
+    state.accessToken = tokenRes.json.access_token;
+    document.getElementById("config").open = false;
+
+    await loadCaseTypes();
+}
+
+async function loadCaseTypes() {
+    const { json } = await dx("GET", ["/casetypes"]);
+    if (json.applicationIsConstellationCompatible !== true || !json.caseTypes) {
+        throw new Error("Not constellation compatible and/or no case types defined.");
+    }
+    const container = document.getElementById("caseTypes");
+    const heading = document.createElement("h2");
+    heading.textContent = "Create a case";
+    container.replaceChildren(heading);
+    for (const ct of Object.values(json.caseTypes)) {
+        const btn = document.createElement("button");
+        btn.textContent = ct.name;
+        btn.title = ct.ID;
+        btn.addEventListener("click", () => run(() => createCase(ct.ID)));
+        container.append(btn, " ");
+    }
+}
+
+async function createCase(caseTypeId) {
+    const actionEl = document.getElementById("action");
+    actionEl.replaceChildren();
+
+    const created = await dx("POST", ["/cases"], dumpJson({ caseTypeID: caseTypeId }));
+    const caseModel = parseDxResponse(created.json);
+
+    if (!(await openNextAssignment(caseModel))) {
+        throw new Error(`Case ${caseModel.caseInfo.businessId} has no assignment action you can perform.`);
+    }
+}
+
+// The C++ app has the user pick an assignment, then an action. Here we take
+// the first assignment the user can perform, and its first action. Returns
+// false if there is nothing to open.
+async function openNextAssignment(model) {
+    const assignment = model.caseInfo.assignments.find(a => a.canPerform);
+    const action = assignment?.actions[0];
+    if (!action) return false;
+    await openAssignmentAction(assignment.id, action.id);
+    return true;
+}
+
+async function openAssignmentAction(assignmentId, actionId) {
+    const res = await dx("GET", ["/assignments/", assignmentId, "/actions/", actionId]);
+    const model = parseDxResponse(res.json);
+    state.assignmentId = assignmentId;
+    state.actionId = actionId;
+    state.etag = res.etag;
+    state.model = model;
+
+    const root = model.components[model.rootKey];
+    if (!root) throw new Error(`Root view not found: ${model.rootKey}`);
+
+    const actionEl = document.getElementById("action");
+    const heading = document.createElement("h2");
+    const action = model.caseInfo.assignments.find(a => a.id === assignmentId)?.actions.find(x => x.id === actionId);
+    heading.textContent = `${model.caseInfo.businessId}: ${action?.name ?? actionId}`;
+    const form = document.createElement("div");
+    renderComponent(root, model, form);
+    const submit = document.createElement("button");
+    submit.textContent = "Submit";
+    submit.addEventListener("click", () => run(submitAction));
+    actionEl.replaceChildren(heading, form, submit);
+}
+
+async function submitAction() {
+    const model = state.model;
+    if (!validateComponent(model.components[model.rootKey], model)) {
+        console.error("Validation failed. Did you fill out all required fields?");
+        return;
+    }
+
+    // Port of submit_open_assignment_action(): dirty, non-special,
+    // non-class-key fields; values are sent as strings.
+    const content = {};
+    let haveContent = false;
+    for (const field of Object.values(model.fields)) {
+        if (field.isSpecial || field.isClassKey) continue;
+        if (field.isDirty) {
+            content[field.id] = field.data;
+            haveContent = true;
+        }
+    }
+    const body = haveContent ? dumpJson({ content }) : undefined;
+
+    const res = await dx("PATCH", ["/assignments/", state.assignmentId, "/actions/", state.actionId],
+                         body, { "If-Match": state.etag });
+    const after = parseDxResponse(res.json);
+
+    // Chain into the next assignment if there is one we can perform;
+    // otherwise we're done with this case (for now).
+    if (await openNextAssignment(after)) return;
+
+    const ci = after.caseInfo;
+    const reason = ci.assignments.length === 0
+        ? "No open assignments remain."
+        : "Remaining assignments can't be performed by this user.";
+    const msg = document.createElement("p");
+    msg.textContent = `Submitted. Case ${ci.businessId} is now: ${ci.status}. ${reason}`;
+    document.getElementById("action").replaceChildren(msg);
+}
+
+// Runs an async step, sending any failure to the console.
+function run(step) {
+    step().catch(err => console.error(err));
+}
+
+// Startup: pre-fill the form; if everything is configured, skip straight in.
+for (const k of CONFIG_KEYS) document.getElementById(k).value = CONFIG[k];
+document.getElementById("go").addEventListener("click", () => run(go));
+
+if (CONFIG_KEYS.every(k => CONFIG[k] !== "")) {
+    document.getElementById("config").open = false;
+    run(go);
+} else {
+    document.getElementById("config").open = true;
+}
+</script>
+</body>
+</html>
